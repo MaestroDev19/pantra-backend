@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 async def process_embedding_queue_task(batch_size: int = 20) -> None:
     logger.info("Background task started to process embedding queue (batch size: %d)", batch_size)
     try:
-        vector_store = await get_vector_store()
+        vector_store = get_vector_store()
         settings = get_settings()
         supabase = get_supabase_client(settings)
         if supabase is None:
@@ -131,7 +131,7 @@ async def add_pantry_item(pantry_item: PantryItem, background_tasks: BackgroundT
         raise AppError("Supabase is not configured", status_code=500)
 
     try:
-        vector_store = await get_vector_store()
+        vector_store = get_vector_store()
         embeddings_service = vector_store.embeddings
 
         name = str(pantry_item.name).strip()

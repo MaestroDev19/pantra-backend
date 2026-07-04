@@ -7,6 +7,7 @@ from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.routers.health import router as health_router
 from app.routers.pantry import router as pantry_router
+from app.routers.recipe import router as recipe_router
 
 
 def create_app() -> FastAPI:
@@ -29,6 +30,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router, prefix="/api")
     app.include_router(pantry_router, prefix="/api")
+    app.include_router(recipe_router, prefix="/api")
     @app.get("/")
     def root():
         return {"message": "Welcome to the Pantra API"}
