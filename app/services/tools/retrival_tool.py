@@ -10,7 +10,7 @@ def retrive_pantry_items(
     config: Annotated[RunnableConfig, InjectedToolArg],
 ) -> list[str]:
     """Retrieves pantry items from the pantry based on the query."""
-    owner_id = config["configurable"]["owner_id"]  # set per-request, not by the LLM
+    owner_id = str(config["configurable"]["owner_id"])  # set per-request, not by the LLM
 
     retriever = get_vector_store().as_retriever(
         search_kwargs={"filter": {"owner_id": owner_id}}

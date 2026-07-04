@@ -10,7 +10,7 @@ RECIPE_PROMPT = (
     "gap: <string|null>\n"
     "tags[N]:\n"
     "  <tag>\n"
-    "ingredients[N]{name,source}:\n"
+    "ingredients[N]{{name,source}}:\n"
     "  <ingredient>,<pantry|buy>\n"
     "instructions[N]:\n"
     "  <step>\n"

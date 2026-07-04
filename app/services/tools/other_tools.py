@@ -61,6 +61,11 @@ def extract_text_content(content) -> str:
 def grade_document(state:MessagesState)-> Literal["generate_recipe", "rewrite_question"]:
     """Determine whether the retrieved documents are relevant to the question."""
 
+    # Prevent infinite RAG loops if we have already searched and rewritten the query once
+    human_messages = [msg for msg in state["messages"] if getattr(msg, "type", None) == "human"]
+    if len(human_messages) >= 2:
+        return "generate_recipe"
+
     question = extract_text_content(state["messages"][0].content)
     context = extract_text_content(state["messages"][-1].content)
     prompt = GRADE_PROMPT.format(context=context, question=question)
