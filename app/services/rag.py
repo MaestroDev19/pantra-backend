@@ -6,7 +6,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.graph import MessagesState
 from app.services.tools.retrival_tool import retriver_tool
 from app.services.tools.generate_query import generate_query_or_respond
-from app.services.tools.other_tools import grade_document, rewrite_question, generate_recipe
+from app.services.tools.other_tools import grade_document, rewrite_question, generate_recipe, extract_text_content
 workflow_builder = StateGraph(MessagesState)
 
 workflow_builder.add_node("generate_query_or_respond", generate_query_or_respond)
@@ -52,4 +52,4 @@ def run_rag(query: str, owner_id: UUID):
     
     # Extract the last message (the generated recipe/response)
     final_message = result["messages"][-1]
-    return final_message.content
+    return extract_text_content(final_message.content)

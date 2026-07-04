@@ -44,11 +44,25 @@ grader_model = init_chat_model(
     temperature=temp,
 )
 
+def extract_text_content(content) -> str:
+    if isinstance(content, str):
+        return content
+    elif isinstance(content, list):
+        text_parts = []
+        for part in content:
+            if isinstance(part, str):
+                text_parts.append(part)
+            elif isinstance(part, dict):
+                if part.get("type") == "text" and "text" in part:
+                    text_parts.append(part["text"])
+        return "".join(text_parts)
+    return str(content) if content is not None else ""
+
 def grade_document(state:MessagesState)-> Literal["generate_recipe", "rewrite_question"]:
     """Determine whether the retrieved documents are relevant to the question."""
 
-    question = state["messages"][0].content
-    context = state["messages"][-1].content
+    question = extract_text_content(state["messages"][0].content)
+    context = extract_text_content(state["messages"][-1].content)
     prompt = GRADE_PROMPT.format(context=context, question=question)
     response = grader_model.with_structured_output(GradeDocuments).invoke(  [{"role": "user", "content": prompt}])
     if response.binary_score == "yes":
@@ -57,15 +71,15 @@ def grade_document(state:MessagesState)-> Literal["generate_recipe", "rewrite_qu
         return "rewrite_question"
 
 def rewrite_question(state:MessagesState):
-    question = state["messages"][0].content
+    question = extract_text_content(state["messages"][0].content)
     prompt = REWRITE_PROMPT.format(question=question)
     response = grader_model.invoke([{"role": "user", "content": prompt}])
-    return {"messages": [HumanMessage(content=response.content)]}
+    return {"messages": [HumanMessage(content=extract_text_content(response.content))]}
 
 
 def generate_recipe(state:MessagesState):
-    question = state["messages"][0].content
-    context = state["messages"][-1].content
+    question = extract_text_content(state["messages"][0].content)
+    context = extract_text_content(state["messages"][-1].content)
     prompt = RECIPE_PROMPT.format(context=context, question=question)
     response = grader_model.invoke([{"role": "user", "content": prompt}])
     return {"messages": [response]}
