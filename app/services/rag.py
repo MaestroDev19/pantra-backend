@@ -6,13 +6,13 @@ from langgraph.prebuilt import ToolNode
 from langgraph.graph import MessagesState
 from app.services.tools.retrival_tool import retriver_tool
 from app.services.tools.generate_query import generate_query_or_respond
-from app.services.tools.other_tools import grade_document, rewrite_question, generate_recipe, extract_text_content
+from app.services.tools.other_tools import grade_document, generate_recipe, generate_no_match_recipe, extract_text_content
 workflow_builder = StateGraph(MessagesState)
 
 workflow_builder.add_node("generate_query_or_respond", generate_query_or_respond)
 workflow_builder.add_node("retrieve", ToolNode([retriver_tool]))
-workflow_builder.add_node("rewrite_question", rewrite_question)
 workflow_builder.add_node("generate_recipe", generate_recipe)
+workflow_builder.add_node("generate_no_match_recipe", generate_no_match_recipe)
 
 workflow_builder.add_edge(START, "generate_query_or_respond")
 
@@ -33,14 +33,20 @@ workflow_builder.add_conditional_edges(
     },
 )
 
+# Fork, not a loop: grade_document routes to exactly one of two generation
+# nodes, and both terminate at END. No edge anywhere points back to
+# generate_query_or_respond or retrieve — structurally cannot cycle.
 workflow_builder.add_conditional_edges(
     "retrieve",
-    # Assess agent decision
-    grade_document
+    grade_document,
+    {
+        "generate_recipe": "generate_recipe",
+        "generate_no_match_recipe": "generate_no_match_recipe",
+    },
 )
 
 workflow_builder.add_edge("generate_recipe", END)
-workflow_builder.add_edge("rewrite_question", "generate_query_or_respond")
+workflow_builder.add_edge("generate_no_match_recipe", END)
 graph = workflow_builder.compile()
 
 def run_rag(query: str, owner_id: UUID) -> tuple[str, list]:

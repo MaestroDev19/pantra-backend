@@ -3,7 +3,7 @@ from typing import Literal
 from app.core.config import get_settings
 from langchain.chat_models import init_chat_model
 from langgraph.graph import MessagesState
-from langchain.messages import HumanMessage, SystemMessage
+from langchain.messages import SystemMessage
 from app.core.prompt import RECIPE_PROMPT
 
 GRADE_PROMPT = """role: grader
@@ -15,17 +15,37 @@ rule[3]:
 context: {context}
 question: {question}
 output: score"""
-REWRITE_PROMPT = (
-    "task: rewrite question\n"
-    "out: improved_question only. no preamble, no explanation, no questions back to user\n"
-    "step[2]:\n"
-    "  - infer underlying semantic intent of input\n"
-    "  - output improved question, same intent\n"
-    "rule[2]:\n"
-    "  - never ask user for clarification\n"
-    "  - if intent ambiguous, pick most likely reading, output anyway\n"
-    "input: {question}\n"
-    "output: improved_question"
+# Used only when the grader says the retrieved pantry items don't actually
+# match the request. No rewrite, no loop back — this path always terminates
+# in one recipe, built entirely from "buy" ingredients since pantry didn't help.
+NO_MATCH_RECIPE_PROMPT = (
+    "role: recipe engine, buy-list mode\n"
+    "src: user request only. pantry ctx below was checked and found NOT relevant — ignore it, do not reference it\n"
+    "out: ONE recipe, TOON only. no json, no md, no backticks. no preamble, no explanation, no questions\n"
+    "schema:\n"
+    "title: <string>\n"
+    "servings: <int>\n"
+    "prep_minutes: <int>\n"
+    "cook_minutes: <int>\n"
+    "gap: <string>\n"
+    "tags[N]:\n"
+    "  <tag>\n"
+    "ingredients[N]{{name,source}}:\n"
+    "  <ingredient>,buy\n"
+    "instructions[N]:\n"
+    "  <step>\n"
+    "rule[9]:\n"
+    "  - EVERY ingredient source=buy. pantry had nothing usable for this dish\n"
+    "  - gap: always set — 1 short sentence noting pantry had no relevant items, full buy-list recipe given instead\n"
+    "  - obey prefs (cuisine/diet/prefs from question)\n"
+    "  - strings short, no filler/hedge/pleasantries\n"
+    "  - instructions: imperative, 1 action/line, terse\n"
+    "  - N = actual row count each block\n"
+    "  - never ask user for clarification, missing info, or confirmation\n"
+    "  - if info missing/ambiguous, assume reasonable default silently, output recipe anyway\n"
+    "  - servings/prep_minutes/cook_minutes: always provide reasonable int estimate\n"
+    "irrelevant_ctx (ignore, shown for reference only):\n<context>\n{context}\n</context>\n"
+    "question: {question}"
 )
 
 model = get_settings().gemini_model
@@ -98,40 +118,46 @@ def _format_pantry_context(raw_context: str) -> str:
     return ", ".join(names) if names else "NONE"
 
 
-def grade_document(state:MessagesState)-> Literal["generate_recipe", "rewrite_question"]:
-    """Determine whether the retrieved documents are relevant to the question."""
-
-    # Prevent infinite RAG loops if we have already searched and rewritten the query once
-    human_messages = [msg for msg in state["messages"] if getattr(msg, "type", None) == "human"]
-    if len(human_messages) >= 2:
-        return "generate_recipe"
-
+def grade_document(state: MessagesState) -> Literal["generate_recipe", "generate_no_match_recipe"]:
+    """Check retrieved pantry items against the question. No rewrite path —
+    frontend already constrains query/cuisine/diet/prefs into an unambiguous
+    shape, so a bad grade means retrieval genuinely found nothing useful,
+    not that the question needs rephrasing. Routes to one of two single-call
+    generation paths; never loops back."""
     question = extract_text_content(state["messages"][0].content)
     raw_context = extract_text_content(state["messages"][-1].content)
     context = _format_pantry_context(raw_context)
-    prompt = GRADE_PROMPT.format(context=context, question=question)
-    response = grader_model.with_structured_output(GradeDocuments).invoke([{"role": "user", "content": prompt}])
-    if response.binary_score == "yes":
-        return "generate_recipe"
-    else:
-        return "rewrite_question"
 
-def rewrite_question(state:MessagesState):
-    question = extract_text_content(state["messages"][0].content)
-    prompt = REWRITE_PROMPT.format(question=question)
-    response = grader_model.invoke([{"role": "user", "content": prompt}])
-    return {"messages": [HumanMessage(content=extract_text_content(response.content))]}
+    if context == "NONE":
+        # Nothing came back at all — skip the grading call entirely, no
+        # ambiguity to check. Saves one model call in the common empty case.
+        return "generate_no_match_recipe"
+
+    prompt = GRADE_PROMPT.format(context=context, question=question)
+    response = grader_model.with_structured_output(GradeDocuments).invoke(
+        [{"role": "user", "content": prompt}]
+    )
+    return "generate_recipe" if response.binary_score == "yes" else "generate_no_match_recipe"
 
 
 def generate_recipe(state: MessagesState):
+    """Pantry-first path — grader confirmed retrieved items are relevant."""
     question = extract_text_content(state["messages"][0].content)
     raw_context = extract_text_content(state["messages"][-1].content)
-    context = _format_pantry_context(raw_context)  # "NONE" if pantry search found nothing
+    context = _format_pantry_context(raw_context)
 
     prompt = RECIPE_PROMPT.format(context=context, question=question)
+    response = recipe_model.invoke([SystemMessage(content=prompt)])
+    return {"messages": [response]}
 
-    # System role, not user role: these are operating rules for the model to
-    # follow, not background info to weigh against its own judgment. This is
-    # the fix for the "model went conversational and asked a question" bug.
+
+def generate_no_match_recipe(state: MessagesState):
+    """Buy-list path — pantry had nothing relevant (grader said no, or
+    retrieval returned nothing). Always terminates here, no loop."""
+    question = extract_text_content(state["messages"][0].content)
+    raw_context = extract_text_content(state["messages"][-1].content)
+    context = _format_pantry_context(raw_context)
+
+    prompt = NO_MATCH_RECIPE_PROMPT.format(context=context, question=question)
     response = recipe_model.invoke([SystemMessage(content=prompt)])
     return {"messages": [response]}
