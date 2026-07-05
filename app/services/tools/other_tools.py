@@ -3,7 +3,7 @@ from typing import Literal
 from app.core.config import get_settings
 from langchain.chat_models import init_chat_model
 from langgraph.graph import MessagesState
-from langchain.messages import SystemMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from app.core.prompt import RECIPE_PROMPT
 
 GRADE_PROMPT = """role: grader
@@ -147,7 +147,10 @@ def generate_recipe(state: MessagesState):
     context = _format_pantry_context(raw_context)
 
     prompt = RECIPE_PROMPT.format(context=context, question=question)
-    response = recipe_model.invoke([SystemMessage(content=prompt)])
+    response = recipe_model.invoke([
+        SystemMessage(content=prompt),
+        HumanMessage(content=question),
+    ])
     return {"messages": [response]}
 
 
@@ -159,5 +162,8 @@ def generate_no_match_recipe(state: MessagesState):
     context = _format_pantry_context(raw_context)
 
     prompt = NO_MATCH_RECIPE_PROMPT.format(context=context, question=question)
-    response = recipe_model.invoke([SystemMessage(content=prompt)])
+    response = recipe_model.invoke([
+        SystemMessage(content=prompt),
+        HumanMessage(content=question),
+    ])
     return {"messages": [response]}
