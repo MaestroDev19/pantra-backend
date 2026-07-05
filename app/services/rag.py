@@ -43,8 +43,8 @@ workflow_builder.add_edge("generate_recipe", END)
 workflow_builder.add_edge("rewrite_question", "generate_query_or_respond")
 graph = workflow_builder.compile()
 
-def run_rag(query: str, owner_id: UUID):
-    # Run the graph synchronously to completion
+def run_rag(query: str, owner_id: UUID) -> tuple[str, list]:
+    """Run the RAG graph and return (recipe_text, all_messages)."""
     result = graph.invoke(
         {"messages": [HumanMessage(content=query)]},
         config={"configurable": {"owner_id": owner_id}}
@@ -52,4 +52,5 @@ def run_rag(query: str, owner_id: UUID):
     
     # Extract the last message (the generated recipe/response)
     final_message = result["messages"][-1]
-    return extract_text_content(final_message.content)
+    recipe_text = extract_text_content(final_message.content)
+    return recipe_text, result["messages"]
