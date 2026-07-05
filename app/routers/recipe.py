@@ -49,9 +49,25 @@ def _build_pantry_id_map(rag_messages: list) -> dict[str, str]:
     return name_to_id
 
 
-def parse_toon_recipe(text: str, pantry_id_map: Optional[dict[str, str]] = None) -> dict:
-    """Parses a recipe in TOON format to the structure expected by the frontend."""
+def _strip_fences(text: str) -> str:
+    """Remove markdown code fences that LLMs often add despite instructions."""
     lines = text.strip().split("\n")
+    # Strip leading/trailing ``` lines (with optional language tag)
+    while lines and lines[0].strip().startswith("```"):
+        lines.pop(0)
+    while lines and lines[-1].strip().startswith("```"):
+        lines.pop()
+    return "\n".join(lines)
+
+
+def parse_toon_recipe(text: str, pantry_id_map: Optional[dict[str, str]] = None) -> dict:
+    import logging
+    logger = logging.getLogger(__name__)
+
+    cleaned = _strip_fences(text)
+    logger.info("=== RAW TOON TEXT (after fence strip) ===\n%s\n=== END TOON ===", cleaned)
+
+    lines = cleaned.strip().split("\n")
     title = "Generated Recipe"
     gap = None
     tags = []
@@ -64,52 +80,63 @@ def parse_toon_recipe(text: str, pantry_id_map: Optional[dict[str, str]] = None)
     matched_pantry_item_ids: list[str] = []
 
     current_section = None
+    step_marker = re.compile(r'^[\-\*]?\s*\d+[\.\)]\s+')
 
     for line in lines:
         line_str = line.strip()
         if not line_str:
             continue
+        low = line_str.lower()
 
-        # Check for headers
-        if line_str.startswith("title:"):
+        if low.startswith("title:"):
             title = line_str[len("title:"):].strip()
             current_section = None
-        elif line_str.startswith("servings:"):
+        elif low.startswith("servings:"):
             servings = _safe_int(line_str[len("servings:"):])
             current_section = None
-        elif line_str.startswith("prep_minutes:"):
+        elif low.startswith("prep_minutes:"):
             prep_minutes = _safe_int(line_str[len("prep_minutes:"):])
             current_section = None
-        elif line_str.startswith("cook_minutes:"):
+        elif low.startswith("cook_minutes:"):
             cook_minutes = _safe_int(line_str[len("cook_minutes:"):])
             current_section = None
-        elif line_str.startswith("gap:"):
+        elif low.startswith("gap:"):
             gap_val = line_str[len("gap:"):].strip()
             gap = None if gap_val.lower() == "null" or not gap_val else gap_val
             current_section = None
-        elif line_str.startswith("tags["):
+        elif low.startswith("tags[") or low == "tags:":
             current_section = "tags"
-        elif line_str.startswith("ingredients["):
+        elif low.startswith("ingredients[") or low == "ingredients:":
             current_section = "ingredients"
-        elif line_str.startswith("instructions["):
+        elif low.startswith("instructions[") or low.startswith("steps[") or low in ("instructions:", "steps:"):
             current_section = "instructions"
-        elif current_section == "tags" and line.startswith("  "):
-            tags.append(line_str)
-        elif current_section == "ingredients" and line.startswith("  "):
-            # Format: name,source (e.g. lemon,pantry)
-            parts = line_str.split(",")
+        elif current_section == "tags":
+            tag = line_str.lstrip("- ").strip()
+            if tag:
+                tags.append(tag)
+        elif current_section == "ingredients":
+            entry = line_str.lstrip("- ").strip()
+            parts = entry.rsplit(",", 1)  # split on LAST comma — protects names with commas
             ing_name = parts[0].strip()
-            source = parts[1].strip() if len(parts) > 1 else "buy"
-            ingredients.append({"name": ing_name, "source": source})
-            if source == "buy":
-                missing_ingredients.append(ing_name)
-            elif source == "pantry" and pantry_id_map:
-                # Try to match this ingredient to a pantry item ID
-                item_id = pantry_id_map.get(ing_name.lower())
-                if item_id:
-                    matched_pantry_item_ids.append(item_id)
-        elif current_section == "instructions" and line.startswith("  "):
-            steps.append(line_str)
+            source = parts[1].strip().lower() if len(parts) > 1 else "buy"
+            if source not in ("pantry", "buy"):
+                source = "buy"  # malformed source defaults safe
+            if ing_name:
+                ingredients.append({"name": ing_name, "source": source})
+                if source == "buy":
+                    missing_ingredients.append(ing_name)
+                elif source == "pantry" and pantry_id_map:
+                    item_id = pantry_id_map.get(ing_name.lower())
+                    if item_id:
+                        matched_pantry_item_ids.append(item_id)
+        elif current_section == "instructions":
+            m = step_marker.match(line_str)
+            step = line_str[m.end():].strip() if m else line_str.lstrip("- ").strip()
+            if step:
+                steps.append(step)
+
+    logger.info("Parsed: title=%s servings=%s prep=%s cook=%s tags=%d ingredients=%d steps=%d",
+                title, servings, prep_minutes, cook_minutes, len(tags), len(ingredients), len(steps))
 
     return {
         "recipe": {
@@ -138,6 +165,8 @@ async def generate_recipe(
             query_text += f" (Preferences: {prefs})"
 
         recipe_text, rag_messages = run_rag(query_text, current_user_id)
+
+        print(f"\n{'='*60}\nRAW RECIPE TEXT:\n{recipe_text}\n{'='*60}\n")
 
         # Build a mapping of pantry item names → IDs from the retrieval context
         pantry_id_map = _build_pantry_id_map(rag_messages)
